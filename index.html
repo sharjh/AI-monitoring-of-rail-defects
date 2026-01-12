@@ -1,0 +1,181 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anomaly Detection Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+    <script type="text/babel">
+        console.log("Script loaded");
+
+        const { useState } = React;
+
+        const App = () => {
+            const [file, setFile] = useState(null);
+            const [results, setResults] = useState(null);
+            const [error, setError] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            const handleFileChange = (event) => {
+                const uploadedFile = event.target.files[0];
+                if (uploadedFile && uploadedFile.name.endsWith('.csv')) {
+                    setFile(uploadedFile);
+                    setError(null);
+                } else {
+                    setError('Please upload a valid CSV file.');
+                    setFile(null);
+                }
+            };
+
+            const handleAnalyze = async () => {
+                if (!file) {
+                    setError('Please upload a dataset first.');
+                    return;
+                }
+
+                setLoading(true);
+                setError(null);
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    console.log('Sending request to backend...');
+                    const response = await fetch('/analyze', {
+                        method: 'POST',
+                        body: formData,
+                    });
+
+                    console.log('Response received:', response);
+                    if (!response.ok) {
+                        throw new Error('Failed to analyze the dataset.');
+                    }
+
+                    const data = await response.json();
+                    console.log('Data received:', data);
+                    setResults(data);
+                } catch (err) {
+                    console.log('Error:', err);
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="container mx-auto p-4">
+                    <h1 className="text-3xl font-bold mb-4 text-center">Anomaly Detection Dashboard</h1>
+                    
+                    <div className="mb-6">
+                        <label className="block text-lg font-medium mb-2">Upload Accelerometer Dataset (CSV):</label>
+                        <input
+                            type="file"
+                            accept=".csv"
+                            onChange={handleFileChange}
+                            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                        />
+                    </div>
+
+                    <button
+                        onClick={handleAnalyze}
+                        disabled={loading}
+                        className={`w-full py-2 px-4 rounded text-white font-semibold ${loading ? 'bg-gray-400' : 'bg-blue-500 hover:bg-blue-600'}`}
+                    >
+                        {loading ? 'Analyzing...' : 'Analyze Dataset'}
+                    </button>
+
+                    {error && (
+                        <div className="mt-4 p-4 bg-red-100 text-red-700 rounded">
+                            {error}
+                        </div>
+                    )}
+
+                    {results && (
+                        <div className="mt-6 p-4 bg-white rounded shadow">
+                            <h2 className="text-2xl font-semibold mb-4">Analysis Results</h2>
+                            <div className="space-y-4">
+                                <div>
+                                    <p className="text-lg">
+                                        <span className="font-medium">Anomalous:</span> {results.isAnomalous ? 'Yes' : 'No'}
+                                    </p>
+                                </div>
+                                <div>
+                                    <p className="text-lg">
+                                        <span className="font-medium">Percentage of Anomalies:</span> {results.anomalyPercentage.toFixed(2)}%
+                                    </p>
+                                </div>
+                                {results.anomalyDistances.length > 0 && (
+                                    <div>
+                                        <p className="text-lg font-medium">Distances of Anomalies from Threshold:</p>
+                                        <ul className="list-disc pl-5">
+                                            {results.anomalyDistances.slice(0, 5).map((distance, index) => (
+                                                <li key={index} className="text-sm">
+                                                    Window {results.anomalyIndices[index]}: {distance.toFixed(4)}
+                                                </li>
+                                            ))}
+                                            {results.anomalyDistances.length > 5 && (
+                                                <li className="text-sm text-gray-500">
+                                                    ...and {results.anomalyDistances.length - 5} more.
+                                                </li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        console.log("Rendering App");
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
